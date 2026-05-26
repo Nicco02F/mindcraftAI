@@ -9,7 +9,8 @@ export class SelfPrompter {
         this.interrupt = false;
         this.prompt = '';
         this.idle_time = 0;
-        this.cooldown = 2000;
+        const profileCooldown = Number(agent?.prompter?.profile?.self_prompt_cooldown);
+        this.cooldown = Number.isFinite(profileCooldown) && profileCooldown > 0 ? profileCooldown : 15000;
     }
 
     start(prompt) {
@@ -62,10 +63,33 @@ export class SelfPrompter {
         this.loop_active = true;
         let no_command_count = 0;
         const MAX_NO_COMMAND = 3;
-        while (!this.interrupt) {
-            const msg = `You are self-prompting with the goal: '${this.prompt}'. Your next response MUST contain a command with this syntax: !commandName. Respond:`;
-            
-            let used_command = await this.agent.handleMessage('system', msg, -1);
+        while (!this.interrupt && this.state === ACTIVE) {
+            let used_command = false;
+            try {
+                if (this.agent.prompter?.profile?.deterministic_autonomy !== false) {
+                    used_command = await this.agent.executeAutonomousPlannerStep('self_prompt_loop');
+                }
+
+                if (!used_command) {
+                    const objectivePlan = this.agent.objective_planner?.formatPrompt?.() || 'No objective planner available; inspect state and choose the next survival milestone.';
+                    const msg = `You are self-prompting with the long-term goal: '${this.prompt}'.
+
+Active dynamic microtask plan:
+${objectivePlan}
+
+Your next response MUST contain exactly one executable command with this syntax: !commandName. Review the latest action result first. Follow the active [now] microtask unless immediate safety requires a different command. If the microtask fails, choose a fallback inside the same objective instead of jumping to a new project. Respond:`;
+                    used_command = await this.agent.handleMessage('system', msg, 1);
+                }
+            } catch (err) {
+                const msg = `Self-prompt loop recovered from error: ${err?.message || err}`;
+                console.error(msg);
+                this.agent.memory_bank?.addEvent?.(msg, -5);
+                this.agent.autonomy_logger?.log?.({
+                    type: 'self_prompt_error',
+                    error: err?.stack || String(err)
+                });
+            }
+
             if (!used_command) {
                 no_command_count++;
                 if (no_command_count >= MAX_NO_COMMAND) {
@@ -107,8 +131,10 @@ export class SelfPrompter {
 
     async stopLoop() {
         // you can call this without await if you don't need to wait for it to finish
-        if (this.interrupt)
+        if (!this.loop_active) {
+            this.interrupt = false;
             return;
+        }
         console.log('stopping self-prompt loop')
         this.interrupt = true;
         while (this.loop_active) {
@@ -118,17 +144,15 @@ export class SelfPrompter {
     }
 
     async stop(stop_action=true) {
-        this.interrupt = true;
         if (stop_action)
             await this.agent.actions.stop();
-        this.stopLoop();
+        await this.stopLoop();
         this.state = STOPPED;
     }
 
     async pause() {
-        this.interrupt = true;
         await this.agent.actions.stop();
-        this.stopLoop();
+        await this.stopLoop();
         this.state = PAUSED;
     }
 

@@ -120,12 +120,12 @@ async function processQueue() {
                 });
                 player.on('error', async (err) => {
                     console.error('[TTS] ffplay error', err);
-                    try { await fs.unlink(tmpPath); } catch {}
+                    try { await fs.unlink(tmpPath); } catch { /* Temp file may already be gone. */ }
                     isSpeaking = false;
                     processQueue();
                 });
                 player.on('exit', async () => {
-                    try { await fs.unlink(tmpPath); } catch {}
+                    try { await fs.unlink(tmpPath); } catch { /* Temp file may already be gone. */ }
                     isSpeaking = false;
                     processQueue();
                 });

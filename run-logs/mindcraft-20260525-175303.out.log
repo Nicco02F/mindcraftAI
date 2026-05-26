@@ -1,0 +1,23 @@
+
+> start
+> node main.js
+
+MindServer running on port 8080 on host localhost
+Connecting to MindServer
+Client connected
+andy connected to MindServer
+Starting agent
+Initializing agent andy...
+Examples initialized.
+No task.
+andy logging into minecraft...
+andy updating available agents
+Error: connect EACCES 192.168.0.191:25565
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -4092,
+  code: 'EACCES',
+  syscall: 'connect',
+  address: '192.168.0.191',
+  port: 25565
+}
+Agent process exited with code 1 and signal null

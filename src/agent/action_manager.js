@@ -1,3 +1,5 @@
+import assert from 'assert';
+
 export class ActionManager {
     constructor(agent) {
         this.agent = agent;
@@ -26,7 +28,8 @@ export class ActionManager {
     async stop() {
         if (!this.executing) return;
         const timeout = setTimeout(() => {
-            this.agent.cleanKill('Code execution refused stop after 10 seconds. Killing process.');
+            console.error('Code execution refused stop after 10 seconds. Force clearing execution state.');
+            this.executing = false;
         }, 10000);
         while (this.executing) {
             this.agent.requestInterrupt();
@@ -39,6 +42,16 @@ export class ActionManager {
     cancelResume() {
         this.resume_func = null;
         this.resume_name = null;
+    }
+
+    _forceStopBotActivity() {
+        const bot = this.agent?.bot;
+        if (!bot) return;
+        try { bot.stopDigging?.(); } catch {/* best effort cleanup */}
+        try { bot.collectBlock?.cancelTask?.(); } catch {/* best effort cleanup */}
+        try { bot.pathfinder?.stop?.(); } catch {/* best effort cleanup */}
+        try { bot.pvp?.stop?.(); } catch {/* best effort cleanup */}
+        try { bot.clearControlStates?.(); } catch {/* best effort cleanup */}
     }
 
     async _executeResume(actionLabel = null, actionFn = null, timeout = 10) {
@@ -60,6 +73,7 @@ export class ActionManager {
 
     async _executeAction(actionLabel, actionFn, timeout = 10) {
         let TIMEOUT;
+        let progressInterval;
         try {
             if (this.last_action_time > 0) {
                 let time_diff = Date.now() - this.last_action_time;
@@ -93,8 +107,18 @@ export class ActionManager {
             this.agent.clearBotLogs();
 
             this.executing = true;
+            this.timedout = false;
             this.currentActionLabel = actionLabel;
             this.currentActionFn = actionFn;
+            progressInterval = setInterval(() => {
+                if (!this.executing) return;
+                this.agent.autonomy_logger?.log({
+                    type: 'action_progress',
+                    source: 'action_manager',
+                    action: actionLabel,
+                    held_item: this.agent.bot?.heldItem?.name || 'hand'
+                });
+            }, 15000);
 
             // timeout in minutes
             if (timeout > 0) {
@@ -109,6 +133,7 @@ export class ActionManager {
             this.currentActionLabel = '';
             this.currentActionFn = null;
             clearTimeout(TIMEOUT);
+            clearInterval(progressInterval);
 
             // get bot activity summary
             let output = this.getBotOutputSummary();
@@ -124,20 +149,21 @@ export class ActionManager {
             // return action status report
             return { success: true, message: output, interrupted, timedout };
         } catch (err) {
+            this._forceStopBotActivity();
             this.executing = false;
             this.currentActionLabel = '';
             this.currentActionFn = null;
             clearTimeout(TIMEOUT);
+            clearInterval(progressInterval);
             this.cancelResume();
             console.error("Code execution triggered catch:", err);
             // Log the full stack trace
             console.error(err.stack);
-            await this.stop();
-            err = err.toString();
+            const errorMessage = err.toString();
 
             let message = this.getBotOutputSummary() +
                 '!!Code threw exception!!\n' +
-                'Error: ' + err + '\n' +
+                'Error: ' + errorMessage + '\n' +
                 'Stack trace:\n' + err.stack+'\n';
 
             let interrupted = this.agent.bot.interrupt_code;

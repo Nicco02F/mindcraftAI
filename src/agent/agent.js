@@ -7,8 +7,19 @@ import { initBot } from '../utils/mcdata.js';
 import { containsCommand, commandExists, executeCommand, truncCommandMessage, isAction, blacklistCommands } from './commands/index.js';
 import { ActionManager } from './action_manager.js';
 import { NPCContoller } from './npc/controller.js';
-import { MemoryBank } from './memory_bank.js';
+import { AdvancedMemoryBank } from './advanced_memory_bank.js';
+import { MemoryAwarePrompter } from './memory_aware_prompter.js';
 import { SelfPrompter } from './self_prompter.js';
+import { evaluateAutonomousCommand } from './autonomy_guard.js';
+import { ObjectivePlanner } from './objective_planner.js';
+import { WorldModel } from './world_model.js';
+import { TaskManager } from './task_framework.js';
+import { AutonomyLogger } from './autonomy_logger.js';
+import { RewardManager } from './reward_manager.js';
+import { SocialInteractionHandler } from './social_interaction_handler.js';
+import { CuriosityEvaluator } from './curiosity_evaluator.js';
+import { ReflectionEngine } from './reflection_engine.js';
+import { InventoryManager } from './inventory_manager.js';
 import convoManager from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
 import { addBrowserViewer } from './vision/browser_viewer.js';
@@ -17,6 +28,12 @@ import settings from './settings.js';
 import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
+
+function isBenignProtocolReadError(err) {
+    const text = `${err?.name || ''} ${err?.message || ''} ${err?.stack || ''}`;
+    return text.includes('PartialReadError') ||
+        text.includes('Unexpected buffer end while reading VarInt');
+}
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
@@ -42,7 +59,25 @@ export class Agent {
         this.history = new History(this);
         this.coder = new Coder(this);
         this.npc = new NPCContoller(this);
-        this.memory_bank = new MemoryBank();
+        this.memory_bank = new AdvancedMemoryBank(this.name);
+        this.autonomy_logger = new AutonomyLogger(this);
+        this.reward_manager = new RewardManager(this);
+        this.world_model = new WorldModel(this);
+        this.curiosity_evaluator = new CuriosityEvaluator(this);
+        this.inventory_manager = new InventoryManager(this);
+        this.task_manager = new TaskManager(this.memory_bank);
+        this.objective_planner = new ObjectivePlanner(this);
+        this.reflection_engine = new ReflectionEngine(this);
+        this.social_handler = new SocialInteractionHandler(this);
+        if (this.prompter.profile.personality) {
+            const profileTraits = String(this.prompter.profile.personality)
+                .split(',')
+                .map(trait => trait.trim())
+                .filter(Boolean);
+            const mergedTraits = [...new Set([...profileTraits, ...(this.memory_bank.personality.traits || [])])];
+            this.memory_bank.updatePersonality({ traits: mergedTraits });
+        }
+        this.memory_prompter = new MemoryAwarePrompter(this);
         this.self_prompter = new SelfPrompter(this);
         convoManager.initAgent(this);
         await this.prompter.initExamples();
@@ -81,6 +116,9 @@ export class Agent {
         this.bot.once('kicked', (reason) => onDisconnect('Kicked', reason));
         this.bot.once('end', (reason) => onDisconnect('Disconnected', reason));
         this.bot.on('error', (err) => {
+            if (isBenignProtocolReadError(err)) {
+                return;
+            }
             if (String(err).includes('Duplicate') || String(err).includes('ECONNREFUSED')) {
                  onDisconnect('Error', err);
             } else {
@@ -110,7 +148,7 @@ export class Agent {
             try {
                 clearTimeout(spawnTimeout);
                 addBrowserViewer(this.bot, count_id);
-                console.log('Initializing vision intepreter...');
+                console.log('Initializing vision interpreter...');
                 this.vision_interpreter = new VisionInterpreter(this, settings.allow_vision);
 
                 // wait for a bit so stats are not undefined
@@ -119,7 +157,7 @@ export class Agent {
                 console.log(`${this.name} spawned.`);
                 this.clearBotLogs();
               
-                this._setupEventHandlers(save_data, init_message);
+                await this._setupEventHandlers(save_data, init_message);
                 this.startEvents();
               
                 if (!load_mem) {
@@ -133,6 +171,8 @@ export class Agent {
                         this.task.setAgentGoal();
                     }
                 }
+
+                await this.maybeStartAutonomousGoal();
 
                 await new Promise((resolve) => setTimeout(resolve, 10000));
                 this.checkAllPlayersPresent();
@@ -170,6 +210,8 @@ export class Agent {
                 }
                 else {
                     let translation = await handleEnglishTranslation(message);
+                    const social = this.social_handler?.recordIncoming?.(username, translation);
+                    this.reflection_engine?.reflectOnInteraction?.(username, translation, social?.intent);
                     this.handleMessage(username, translation);
                 }
             } catch (error) {
@@ -283,6 +325,7 @@ export class Agent {
                     this.history.add(source, message);
                 }
                 let execute_res = await executeCommand(this, message);
+                this.recordCommandResult(message, user_command_name, execute_res);
                 if (execute_res) 
                     this.routeResponse(source, execute_res);
                 return true;
@@ -317,9 +360,23 @@ export class Agent {
         for (let i=0; i<max_responses; i++) {
             if (checkInterrupt()) break;
             let history = this.history.getHistory();
-            let res = await this.prompter.promptConvo(history);
+            let currentSituation = `${source}: ${message}`;
+            if (!self_prompt && !from_other_bot && this.social_handler) {
+                currentSituation = this.social_handler.buildContextForMessage(source, message);
+            }
+            this.prompter.profile.conversing = this.memory_prompter.buildSystemPrompt(currentSituation);
+            const allowStaleSelfPrompt = self_prompt && this.self_prompter.isActive();
+            let res = await this.prompter.promptConvo(history, { allowStale: allowStaleSelfPrompt });
 
             console.log(`${this.name} full response to ${source}: ""${res}""`);
+            if (self_prompt) {
+                this.autonomy_logger?.log({
+                    type: 'model_response',
+                    source,
+                    prompt_excerpt: String(message).slice(0, 1000),
+                    response: res
+                });
+            }
 
             if (res.trim().length === 0) {
                 console.warn('no response')
@@ -340,6 +397,32 @@ export class Agent {
 
                 if (checkInterrupt()) break;
                 this.self_prompter.handleUserPromptedCmd(self_prompt, isAction(command_name));
+
+                const action_key = this.memory_prompter.getActionKey(res, command_name);
+                const can_abort = isAction(command_name) && !['!stop', '!stfu', '!restart', '!goal', '!endGoal', '!setMode'].includes(command_name);
+                if (can_abort && this.memory_prompter.shouldAbortAction(action_key)) {
+                    const msg = `Memory warning: ${action_key} has already failed at least twice. Choose a different command, target, or prerequisite instead of repeating it.`;
+                    await this.history.add('system', msg);
+                    continue;
+                }
+
+                if (self_prompt && can_abort) {
+                    const guard = evaluateAutonomousCommand(this, res, command_name);
+                    if (guard?.blocked) {
+                        const msg = `Autonomy guard blocked ${res}. Reason: ${guard.reason} Suggested next step: ${guard.suggestion}`;
+                        await this.history.add('system', msg);
+                        this.memory_bank.addEvent(msg);
+                        this.autonomy_logger?.log({
+                            type: 'guard_blocked_model_command',
+                            source,
+                            command: res,
+                            command_name,
+                            reason: guard.reason,
+                            suggestion: guard.suggestion
+                        });
+                        continue;
+                    }
+                }
 
                 if (settings.show_command_syntax === "full") {
                     this.routeResponse(source, res);
@@ -363,6 +446,7 @@ export class Agent {
 
                 console.log('Agent executed:', command_name, 'and got:', execute_res);
                 used_command = true;
+                this.recordCommandResult(res, command_name, execute_res);
 
                 if (execute_res)
                     this.history.add('system', execute_res);
@@ -372,6 +456,9 @@ export class Agent {
             else { // conversation response
                 this.history.add(this.name, res);
                 this.routeResponse(source, res);
+                if (!self_prompt && !from_other_bot) {
+                    this.social_handler?.recordOutgoing?.(source, res);
+                }
                 break;
             }
             
@@ -379,6 +466,152 @@ export class Agent {
         }
 
         return used_command;
+    }
+
+    async executeAutonomousPlannerStep(source = 'planner') {
+        const previousSuggestedCommand = this.objective_planner?.state?.last_suggested_command || null;
+        const plan = this.objective_planner?.getPlan?.();
+        const commandText = plan?.active_task?.command;
+        const commandName = commandText ? containsCommand(commandText) : null;
+
+        this.autonomy_logger?.log({
+            type: 'planner_selected_command',
+            source,
+            command: commandText || null,
+            command_name: commandName || null,
+            plan
+        });
+
+        if (!commandText || !commandName) {
+            await this.history.add('system', 'Autonomous planner has no executable command. Falling back to model decision.');
+            return false;
+        }
+
+        if (!commandExists(commandName)) {
+            const msg = `Autonomous planner selected unavailable command ${commandName}.`;
+            await this.history.add('system', msg);
+            this.memory_bank.addEvent(msg);
+            this.autonomy_logger?.log({
+                type: 'planner_command_unavailable',
+                source,
+                command: commandText,
+                command_name: commandName
+            });
+            return false;
+        }
+
+        const actionKey = this.memory_prompter.getActionKey(commandText, commandName);
+        const canAbort = isAction(commandName) && !['!stop', '!stfu', '!restart', '!goal', '!endGoal', '!setMode'].includes(commandName);
+        const guard = canAbort ? evaluateAutonomousCommand(this, commandText, commandName) : null;
+        const justRepeatedCommand = previousSuggestedCommand && previousSuggestedCommand === commandText;
+        const canRetryStaleCraftFailure = canAbort &&
+            this.memory_prompter.shouldAbortAction(actionKey) &&
+            plan.active_task?.status === 'active' &&
+            ['!craftRecipe', '!smeltItem', '!consume'].includes(commandName) &&
+            !guard?.blocked &&
+            !justRepeatedCommand;
+
+        if (canRetryStaleCraftFailure) {
+            this.memory_bank.resetFailedAttempt(actionKey);
+            this.autonomy_logger?.log({
+                type: 'planner_retrying_after_stale_failure',
+                source,
+                command: commandText,
+                command_name: commandName,
+                action_key: actionKey,
+                reason: 'The planner selected a new active task, so a previous failure was cleared.'
+            });
+        } else if (canAbort && this.memory_prompter.shouldAbortAction(actionKey)) {
+            const msg = `Planner avoided ${actionKey} because it already failed repeatedly. It will re-plan from current state.`;
+            await this.history.add('system', msg);
+            this.memory_bank.addEvent(msg);
+            this.autonomy_logger?.log({
+                type: 'planner_avoided_repeated_failure',
+                source,
+                command: commandText,
+                command_name: commandName,
+                action_key: actionKey
+            });
+            return false;
+        }
+
+        if (guard?.blocked) {
+            const msg = `Planner command blocked: ${commandText}. Reason: ${guard.reason}. Suggestion: ${guard.suggestion}`;
+            await this.history.add('system', msg);
+            this.memory_bank.addEvent(msg);
+            this.autonomy_logger?.log({
+                type: 'planner_command_blocked',
+                source,
+                command: commandText,
+                command_name: commandName,
+                reason: guard.reason,
+                suggestion: guard.suggestion
+            });
+            return false;
+        }
+
+        await this.history.add('system', `Autonomous planner executing active microtask: ${commandText}`);
+        await this.history.add(this.name, commandText);
+        if (settings.show_command_syntax === 'full') {
+            this.routeResponse('system', commandText);
+        }
+
+        const executeResult = await executeCommand(this, commandText);
+        console.log('Autonomous planner executed:', commandName, 'and got:', executeResult);
+        this.recordCommandResult(commandText, commandName, executeResult, {
+            source,
+            plannerForced: true,
+            plan
+        });
+
+        if (executeResult) {
+            await this.history.add('system', executeResult);
+        }
+        await this.history.save();
+        return true;
+    }
+
+    recordCommandResult(commandText, commandName, result, metadata = {}) {
+        if (!this.memory_prompter) return;
+
+        const actionKey = this.memory_prompter.getActionKey(commandText, commandName);
+        const output = result || `${commandName} produced no action output; it may have been interrupted or blocked.`;
+        const baseReward = this.memory_prompter.scoreActionResult(commandName, output);
+        const rewardEvent = this.reward_manager?.recordCommandResult?.(truncCommandMessage(commandText), commandName, output, baseReward, {
+            ...metadata,
+            actionKey,
+            inventoryPressure: this.inventory_manager?.getSlotStats?.()?.pressure > 0.9
+        });
+        const reward = rewardEvent?.reward ?? baseReward;
+        this.memory_prompter.handleActionResult(actionKey, output, reward, {
+            commandName,
+            rawCommand: truncCommandMessage(commandText)
+        });
+        this.objective_planner?.recordActionResult(truncCommandMessage(commandText), commandName, output);
+        this.reflection_engine?.maybeReflectAfterAction?.(truncCommandMessage(commandText), commandName, output, reward, metadata);
+        this.autonomy_logger?.log({
+            type: 'command_result',
+            source: metadata.source || 'agent',
+            command: truncCommandMessage(commandText),
+            command_name: commandName,
+            action_key: actionKey,
+            reward,
+            result: output,
+            planner_forced: Boolean(metadata.plannerForced)
+        });
+    }
+
+    async maybeStartAutonomousGoal() {
+        if (!this.prompter.profile.auto_goal) return;
+        if (settings.task) return;
+        if (!this.self_prompter.isStopped()) return;
+
+        const goal = this.prompter.profile.autonomous_goal ||
+            'Survive autonomously forever. First inspect surroundings and inventory, then gather varied resources, craft tools, secure food, make or improve a shelter, remember useful places, and keep choosing the next survival milestone. Avoid loops: do not collect wood forever, do not repeat failed actions, and never call !endGoal for this ongoing life goal unless a human tells you to stop.';
+
+        await this.history.add('system', `Autonomous survival goal activated: ${goal}`);
+        await this.history.save();
+        this.self_prompter.start(goal);
     }
 
     async routeResponse(to_player, message) {
@@ -453,6 +686,9 @@ export class Agent {
         });
         // Logging callbacks
         this.bot.on('error' , (err) => {
+            if (isBenignProtocolReadError(err)) {
+                return;
+            }
             console.error('Error event!', err);
         });
         // Use connection handler for runtime disconnects
@@ -476,12 +712,14 @@ export class Agent {
             if (jsonMsg.translate && jsonMsg.translate.startsWith('death') && message.startsWith(this.name)) {
                 console.log('Agent died: ', message);
                 let death_pos = this.bot.entity.position;
-                this.memory_bank.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
-                let death_pos_text = null;
                 if (death_pos) {
-                    death_pos_text = `x: ${death_pos.x.toFixed(2)}, y: ${death_pos.y.toFixed(2)}, z: ${death_pos.z.toFixed(2)}`;
+                    this.memory_bank.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
                 }
+                const death_pos_text = death_pos ? `x: ${death_pos.x.toFixed(2)}, y: ${death_pos.y.toFixed(2)}, z: ${death_pos.z.toFixed(2)}` : null;
                 let dimention = this.bot.game.dimension;
+                this.memory_prompter.handleDeath(death_pos_text || 'unknown', message);
+                this.reward_manager?.recordDeath?.(death_pos_text || 'unknown', message);
+                this.reflection_engine?.reflectOnDeath?.(death_pos_text || 'unknown', message);
                 this.handleMessage('system', `You died at position ${death_pos_text || "unknown"} in the ${dimention} dimension with the final message: '${message}'. Your place of death is saved as 'last_death_position' if you want to return. Previous actions were stopped and you have respawned.`);
             }
         });
@@ -519,6 +757,9 @@ export class Agent {
 
     async update(delta) {
         await this.bot.modes.update();
+        this.reward_manager?.updateSurvivalSignals?.();
+        this.curiosity_evaluator?.update?.();
+        await this.social_handler?.update?.(delta);
         this.self_prompter.update(delta);
         await this.checkTaskDone();
     }

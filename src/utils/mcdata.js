@@ -11,13 +11,16 @@ const armorManager = plugin;
 let mc_version = settings.minecraft_version;
 let mcdata = null;
 let Item = null;
+let partialReadWarningCount = 0;
+let partialReadHandlerInstalled = false;
+const DEFAULT_MCDATA_VERSION = '1.21.4';
 
 /**
  * @typedef {string} ItemName
  * @typedef {string} BlockName
 */
 
-export const WOOD_TYPES = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry'];
+export const WOOD_TYPES = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry', 'pale_oak'];
 export const MATCHING_WOOD_BLOCKS = [
     'log',
     'planks',
@@ -51,8 +54,91 @@ export const WOOL_COLORS = [
     'black'
 ]
 
+function isPartialReadError(err) {
+    const text = `${err?.name || ''} ${err?.message || ''} ${err?.stack || ''}`;
+    return text.includes('PartialReadError') ||
+        text.includes('Unexpected buffer end while reading VarInt');
+}
+
+function warnPartialReadError(err) {
+    partialReadWarningCount++;
+    if (partialReadWarningCount === 1 || partialReadWarningCount % 25 === 0) {
+        const msg = err?.message || String(err);
+        console.warn(`[mcdata] Suppressed ${partialReadWarningCount} protocol PartialReadError(s). Latest: ${msg.substring(0, 160)}`);
+    }
+}
+
+function installPartialReadErrorHandler() {
+    if (partialReadHandlerInstalled) return;
+    partialReadHandlerInstalled = true;
+
+    process.on('uncaughtException', (err) => {
+        if (isPartialReadError(err)) {
+            warnPartialReadError(err);
+            return;
+        }
+        throw err;
+    });
+
+    process.on('unhandledRejection', (err) => {
+        if (isPartialReadError(err)) {
+            warnPartialReadError(err);
+            return;
+        }
+        throw err;
+    });
+}
+
+function silenceProtocolParserPartialReads(client) {
+    if (!client) return;
+
+    // protodef logs partial packet parse stacks directly from the deserializer
+    // when noErrorLogging is false. These packets are ignored by the parser, so
+    // keep the terminal usable and let real client errors flow normally.
+    client.hideErrors = true;
+    if (client.deserializer) {
+        client.deserializer.noErrorLogging = true;
+    }
+
+    if (client._mindcraftSetSerializerWrapped || typeof client.setSerializer !== 'function') {
+        return;
+    }
+
+    const originalSetSerializer = client.setSerializer.bind(client);
+    client.setSerializer = function(...args) {
+        const result = originalSetSerializer(...args);
+        if (this.deserializer) {
+            this.deserializer.noErrorLogging = true;
+        }
+        return result;
+    };
+    client._mindcraftSetSerializerWrapped = true;
+}
+
+function getFallbackMcVersion() {
+    return (!mc_version || mc_version === 'auto') ? DEFAULT_MCDATA_VERSION : mc_version;
+}
+
+function ensureMcData() {
+    if (mcdata && Item) return mcdata;
+
+    const version = getFallbackMcVersion();
+    try {
+        mcdata = minecraftData(version);
+        Item = prismarine_items(version);
+    } catch (err) {
+        if (version === DEFAULT_MCDATA_VERSION) throw err;
+        console.warn(`[mcdata] Could not load minecraft-data for ${version}; falling back to ${DEFAULT_MCDATA_VERSION}.`);
+        mcdata = minecraftData(DEFAULT_MCDATA_VERSION);
+        Item = prismarine_items(DEFAULT_MCDATA_VERSION);
+    }
+    return mcdata;
+}
+
 
 export function initBot(username) {
+    installPartialReadErrorHandler();
+
     const options = {
         username: username,
         host: settings.host,
@@ -66,6 +152,7 @@ export function initBot(username) {
     }
 
     const bot = createBot(options);
+    silenceProtocolParserPartialReads(bot._client);
 
     // Throttle position packets to avoid kicks on Paper/Spigot servers
     // Paper enforces stricter packet rate limits than vanilla, causing ECONNRESET
@@ -105,9 +192,8 @@ export function initBot(username) {
     bot._client.emit = function(event, ...args) {
         if (event === 'error' && args[0]) {
             const err = args[0];
-            const errStr = err instanceof Error ? err.message : String(err);
-            if (errStr.includes('PartialReadError')) {
-                console.warn('[mcdata] Suppressed PartialReadError:', errStr.substring(0, 120));
+            if (isPartialReadError(err)) {
+                warnPartialReadError(err);
                 return true; // Swallow the error
             }
         }
@@ -154,7 +240,8 @@ export function mustCollectManually(blockName) {
 }
 
 export function getItemId(itemName) {
-    let item = mcdata.itemsByName[itemName];
+    const data = ensureMcData();
+    let item = data.itemsByName[itemName];
     if (item) {
         return item.id;
     }
@@ -162,7 +249,8 @@ export function getItemId(itemName) {
 }
 
 export function getItemName(itemId) {
-    let item = mcdata.items[itemId]
+    const data = ensureMcData();
+    let item = data.items[itemId]
     if (item) {
         return item.name;
     }
@@ -170,7 +258,8 @@ export function getItemName(itemId) {
 }
 
 export function getBlockId(blockName) {
-    let block = mcdata.blocksByName[blockName];
+    const data = ensureMcData();
+    let block = data.blocksByName[blockName];
     if (block) {
         return block.id;
     }
@@ -178,7 +267,8 @@ export function getBlockId(blockName) {
 }
 
 export function getBlockName(blockId) {
-    let block = mcdata.blocks[blockId]
+    const data = ensureMcData();
+    let block = data.blocks[blockId]
     if (block) {
         return block.name;
     }
@@ -186,7 +276,8 @@ export function getBlockName(blockId) {
 }
 
 export function getEntityId(entityName) {
-    let entity = mcdata.entitiesByName[entityName];
+    const data = ensureMcData();
+    let entity = data.entitiesByName[entityName];
     if (entity) {
         return entity.id;
     }
@@ -198,8 +289,9 @@ export function getAllItems(ignore) {
         ignore = [];
     }
     let items = []
-    for (const itemId in mcdata.items) {
-        const item = mcdata.items[itemId];
+    const data = ensureMcData();
+    for (const itemId in data.items) {
+        const item = data.items[itemId];
         if (!ignore.includes(item.name)) {
             items.push(item);
         }
@@ -221,8 +313,9 @@ export function getAllBlocks(ignore) {
         ignore = [];
     }
     let blocks = []
-    for (const blockId in mcdata.blocks) {
-        const block = mcdata.blocks[blockId];
+    const data = ensureMcData();
+    for (const blockId in data.blocks) {
+        const block = data.blocks[blockId];
         if (!ignore.includes(block.name)) {
             blocks.push(block);
         }
@@ -240,17 +333,19 @@ export function getAllBlockIds(ignore) {
 }
 
 export function getAllBiomes() {
-    return mcdata.biomes;
+    const data = ensureMcData();
+    return data.biomes;
 }
 
 export function getItemCraftingRecipes(itemName) {
     let itemId = getItemId(itemName);
-    if (!mcdata.recipes[itemId]) {
+    const data = ensureMcData();
+    if (!data.recipes[itemId]) {
         return null;
     }
 
     let recipes = [];
-    for (let r of mcdata.recipes[itemId]) {
+    for (let r of data.recipes[itemId]) {
         let recipe = {};
         let ingredients = [];
         if (r.ingredients) {
@@ -354,7 +449,8 @@ export function getItemAnimalSource(itemName) {
 }
 
 export function getBlockTool(blockName) {
-    let block = mcdata.blocksByName[blockName];
+    const data = ensureMcData();
+    let block = data.blocksByName[blockName];
     if (!block || !block.harvestTools) {
         return null;
     }
@@ -362,6 +458,7 @@ export function getBlockTool(blockName) {
 }
 
 export function makeItem(name, amount=1) {
+    ensureMcData();
     return new Item(getItemId(name), amount);
 }
 

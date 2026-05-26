@@ -22,12 +22,16 @@ export function blacklistCommands(commands) {
             continue;
         }
         delete commandMap[command_name];
-        delete commandList.find(command => command.name === command_name);
+        const index = commandList.findIndex(command => command.name === command_name);
+        if (index !== -1) {
+            commandList.splice(index, 1);
+        }
     }
 }
 
-const commandRegex = /!(\w+)(?:\(((?:-?\d+(?:\.\d+)?|true|false|"[^"]*")(?:\s*,\s*(?:-?\d+(?:\.\d+)?|true|false|"[^"]*"))*)\))?/
-const argRegex = /-?\d+(?:\.\d+)?|true|false|"[^"]*"/g;
+const commandRegex = /!(\w+)(?:\(((?:-?\d+(?:\.\d+)?|true|false|"[^"]*"|'[^']*')(?:\s*,\s*(?:-?\d+(?:\.\d+)?|true|false|"[^"]*"|'[^']*'))*)\))?/;
+const argRegex = /-?\d+(?:\.\d+)?|true|false|"[^"]*"|'[^']*'/g;
+const BLOCK_ALIASES = new Set(['_log', 'log', 'any_log', 'any_wood']);
 
 export function containsCommand(message) {
     const commandMatch = message.match(commandRegex);
@@ -110,16 +114,30 @@ export function parseCommandMessage(message) {
     const params = commandParams(command);
     const paramNames = commandParamNames(command);
     
-    if (args.length !== params.length)
-        return `Command ${command.name} was given ${args.length} args, but requires ${params.length} args.`;
+    if (args.length > params.length)
+        return `Command ${command.name} was given ${args.length} args, but accepts at most ${params.length} args.`;
+
+    if (args.length < params.length) {
+        for (let i = args.length; i < params.length; i++) {
+            const param = params[i];
+            if (param.optional || Object.prototype.hasOwnProperty.call(param, 'default')) {
+                args.push(param.default);
+            } else {
+                return `Command ${command.name} was given ${args.length} args, but requires ${params.length} args.`;
+            }
+        }
+    }
 
     
     for (let i = 0; i < args.length; i++) {
         const param = params[i];
         //Remove any extra characters
-        let arg = args[i].trim();
-        if ((arg.startsWith('"') && arg.endsWith('"')) || (arg.startsWith("'") && arg.endsWith("'"))) {
-            arg = arg.substring(1, arg.length-1);
+        let arg = args[i];
+        if (typeof arg === 'string') {
+            arg = arg.trim();
+            if ((arg.startsWith('"') && arg.endsWith('"')) || (arg.startsWith("'") && arg.endsWith("'"))) {
+                arg = arg.substring(1, arg.length-1);
+            }
         }
         
         //Convert to the correct type
@@ -135,6 +153,7 @@ export function parseCommandMessage(message) {
             case 'ItemName':
                 if (arg.endsWith('plank') || arg.endsWith('seed'))
                     arg += 's'; // add 's' to for common mistakes like "oak_plank" or "wheat_seed"
+                break;
             case 'string':
                 break;
             default:
@@ -161,11 +180,11 @@ export function parseCommandMessage(message) {
                 suppressNoDomainWarning = true; //Don't spam console. Only give the warning once.
             }
         } else if(param.type === 'BlockName') { //Check that there is a block with this name
-            if(getBlockId(arg) == null) return  `Invalid block type: ${arg}.`
+            if(!BLOCK_ALIASES.has(String(arg).toLowerCase()) && getBlockId(arg) == null) return  `Invalid block type: ${arg}.`
         } else if(param.type === 'ItemName') { //Check that there is an item with this name
             if(getItemId(arg) == null) return `Invalid item type: ${arg}.`
         } else if(param.type === 'BlockOrItemName') {
-            if(getBlockId(arg) == null && getItemId(arg) == null) return  `Invalid block or item type: ${arg}.`
+            if(!BLOCK_ALIASES.has(String(arg).toLowerCase()) && getBlockId(arg) == null && getItemId(arg) == null) return  `Invalid block or item type: ${arg}.`
         }
         args[i] = arg;
     }

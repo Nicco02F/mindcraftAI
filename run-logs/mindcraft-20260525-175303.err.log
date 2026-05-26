@@ -1,0 +1,18 @@
+Error pinging server 192.168.0.191:25565 Error: connect EACCES 192.168.0.191:25565
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -4092,
+  code: 'EACCES',
+  syscall: 'connect',
+  address: '192.168.0.191',
+  port: 25565
+}
+Error getting server: Error: MC server not found. (Host: 192.168.0.191, Port: 25565) Check the host and port in settings.js, and ensure the server is running and open to public or LAN.
+    at getServer (file:///C:/Users/furia/Desktop/mindcraft-0.1.4/src/mindcraft/mcserver.js:134:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async Module.createAgent (file:///C:/Users/furia/Desktop/mindcraft-0.1.4/src/mindcraft/mindcraft.js:48:28)
+Attempting to connect anyway...
+keys.json not found. Defaulting to environment variables.
+[LoginGuard] Connection Error: Error: connect EACCES 192.168.0.191:25565
+Disconnected: socketclosed
+[LoginGuard] Connection Failed: Server is under maintenance or restarting.
+Agent process exited too quickly and will not be restarted.

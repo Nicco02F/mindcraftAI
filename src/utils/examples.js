@@ -26,8 +26,13 @@ export class Examples {
             return;
 
         try {
-            // Create array of promises first
-            const embeddingPromises = examples.map(example => {
+            const firstExample = examples[0];
+            if (!firstExample) return;
+
+            const firstText = this.turnsToText(firstExample);
+            this.embeddings[firstText] = await this.model.embed(firstText);
+
+            const embeddingPromises = examples.slice(1).map(example => {
                 const turn_text = this.turnsToText(example);
                 return this.model.embed(turn_text)
                     .then(embedding => {
@@ -35,11 +40,11 @@ export class Examples {
                     });
             });
             
-            // Wait for all embeddings to complete
             await Promise.all(embeddingPromises);
         } catch (err) {
-            console.warn('Error with embedding model, using word-overlap instead.');
+            console.warn(`Error with embedding model, using word-overlap instead. ${err.message || err}`);
             this.model = null;
+            this.embeddings = {};
         }
     }
 
@@ -49,13 +54,19 @@ export class Examples {
 
         let turn_text = this.turnsToText(turns);
         if (this.model !== null) {
-            let embedding = await this.model.embed(turn_text);
-            this.examples.sort((a, b) => 
-                cosineSimilarity(embedding, this.embeddings[this.turnsToText(b)]) -
-                cosineSimilarity(embedding, this.embeddings[this.turnsToText(a)])
-            );
+            try {
+                let embedding = await this.model.embed(turn_text);
+                this.examples.sort((a, b) =>
+                    cosineSimilarity(embedding, this.embeddings[this.turnsToText(b)]) -
+                    cosineSimilarity(embedding, this.embeddings[this.turnsToText(a)])
+                );
+            } catch (err) {
+                console.warn(`Embedding lookup failed, using word-overlap instead. ${err.message || err}`);
+                this.model = null;
+            }
         }
-        else {
+
+        if (this.model === null) {
             this.examples.sort((a, b) => 
                 wordOverlapScore(turn_text, this.turnsToText(b)) -
                 wordOverlapScore(turn_text, this.turnsToText(a))

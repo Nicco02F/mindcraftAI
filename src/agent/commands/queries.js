@@ -1,7 +1,5 @@
 import * as world from '../library/world.js';
 import * as mc from '../../utils/mcdata.js';
-import { getCommandDocs } from './index.js';
-import convoManager from '../conversation.js';
 import { checkLevelBlueprint, checkBlueprint } from '../tasks/construction_tasks.js';
 import { load } from 'cheerio';
 
@@ -14,7 +12,8 @@ export const queryList = [
     {
         name: "!stats",
         description: "Get your bot's location, health, hunger, and time of day.", 
-        perform: function (agent) {
+        perform: async function (agent) {
+            const { default: convoManager } = await import('../conversation.js');
             let bot = agent.bot;
             let res = 'STATS';
             let pos = bot.entity.position;
@@ -32,7 +31,7 @@ export const queryList = [
                 weather = "Thunderstorm";
             res += `\n- Weather: ${weather}`;
             // let block = bot.blockAt(pos);
-            // res += `\n- Artficial light: ${block.skyLight}`;
+            // res += `\n- Artificial light: ${block.skyLight}`;
             // res += `\n- Sky light: ${block.light}`;
             // light properties are bugged, they are not accurate
 
@@ -49,7 +48,7 @@ export const queryList = [
             let action = agent.actions.currentActionLabel;
             if (agent.isIdle())
                 action = 'Idle';
-            res += `\- Current Action: ${action}`;
+            res += `\n- Current Action: ${action}`;
 
 
             let players = world.getNearbyPlayerNames(bot);
@@ -147,7 +146,8 @@ export const queryList = [
     {
         name: "!entities",
         description: "Get the nearby players and entities.",
-        perform: function (agent) {
+        perform: async function (agent) {
+            const { default: convoManager } = await import('../conversation.js');
             let bot = agent.bot;
             let res = 'NEARBY_ENTITIES';
             let players = world.getNearbyPlayerNames(bot);
@@ -168,7 +168,7 @@ export const queryList = [
             let villagerDetails = []; // Store detailed villager info including profession
             
             for (const entity of nearbyEntities) {
-                if (entity.type === 'player' || entity.name === 'item')
+                if (entity.type === 'player' || world.isDroppedItemEntity(entity))
                     continue;
                     
                 if (!entityCounts[entity.name]) {
@@ -341,6 +341,7 @@ export const queryList = [
         name: '!help',
         description: 'Lists all available commands and their descriptions.',
         perform: async function (agent) {
+            const { getCommandDocs } = await import('./index.js');
             return getCommandDocs(agent);
         }
     },

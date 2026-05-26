@@ -1,4 +1,5 @@
 import pf from 'mineflayer-pathfinder';
+import Vec3 from 'vec3';
 import * as mc from '../../utils/mcdata.js';
 
 
@@ -25,7 +26,7 @@ export function getNearestFreeSpace(bot, size=1, distance=8) {
             for (let z = 0; z < size; z++) {
                 let top = bot.blockAt(empty_pos[i].offset(x, 0, z));
                 let bottom = bot.blockAt(empty_pos[i].offset(x, -1, z));
-                if (!top || !top.name == 'air' || !bottom || bottom.drops.length == 0 || !bottom.diggable) {
+                if (!top || top.name !== 'air' || !bottom || bottom.drops.length === 0 || !bottom.diggable) {
                     empty = false;
                     break;
                 }
@@ -135,9 +136,11 @@ export function getNearestBlocks(bot, block_types=null, distance=8, count=10000)
         if (!Array.isArray(block_types))
             block_types = [block_types];
         for(let block_type of block_types) {
-            block_ids.push(mc.getBlockId(block_type));
+            const blockId = mc.getBlockId(block_type);
+            if (blockId !== null) block_ids.push(blockId);
         }
     }
+    if (block_ids.length === 0) return [];
     return getNearestBlocksWhere(bot, block_ids, distance, count);  
 }
 
@@ -152,8 +155,25 @@ export function getNearestBlocksWhere(bot, predicate, distance=8, count=10000) {
      * @example
      * let waterBlocks = world.getNearestBlocksWhere(bot, block => block.name === 'water', 16, 10);
      **/
-    let positions = bot.findBlocks({matching: predicate, maxDistance: distance, count: count});
-    let blocks = positions.map(position => bot.blockAt(position));
+    if (!bot?.entity?.position) return [];
+
+    const options = { matching: predicate, maxDistance: distance, count: count };
+    if (typeof predicate === 'function') {
+        options.matching = block => {
+            if (!block || !block.position || !block.name) {
+                return false;
+            }
+            try {
+                return predicate(block);
+            } catch {
+                return false;
+            }
+        };
+        options.useExtraInfo = true;
+    }
+
+    let positions = bot.findBlocks(options);
+    let blocks = positions.map(position => bot.blockAt(position)).filter(block => block !== null);
     return blocks;
 }
 
@@ -179,6 +199,7 @@ export function getNearestBlock(bot, block_type, distance=16) {
 export function getNearbyEntities(bot, maxDistance=16) {
     let entities = [];
     for (const entity of Object.values(bot.entities)) {
+        if (!entity?.position || !bot?.entity?.position) continue;
         const distance = entity.position.distanceTo(bot.entity.position);
         if (distance > maxDistance) continue;
         entities.push({ entity: entity, distance: distance });
@@ -191,8 +212,35 @@ export function getNearbyEntities(bot, maxDistance=16) {
     return res;
 }
 
+export function getDroppedItem(entity) {
+    try {
+        return entity?.getDroppedItem?.() || null;
+    } catch {
+        return null;
+    }
+}
+
+export function getDroppedItemName(entity) {
+    const item = getDroppedItem(entity);
+    return item?.name || null;
+}
+
+export function isDroppedItemEntity(entity) {
+    if (!entity) return false;
+    if (entity.name === 'item' || entity.name === 'Item' || entity.name === 'item_stack') return true;
+    return getDroppedItem(entity) !== null;
+}
+
 export function getNearestEntityWhere(bot, predicate, maxDistance=16) {
-    return bot.nearestEntity(entity => predicate(entity) && bot.entity.position.distanceTo(entity.position) < maxDistance);
+    if (!bot?.entity?.position) return null;
+    return bot.nearestEntity(entity => {
+        if (!entity?.position) return false;
+        try {
+            return predicate(entity) && bot.entity.position.distanceTo(entity.position) < maxDistance;
+        } catch {
+            return false;
+        }
+    });
 }
 
 
@@ -200,6 +248,7 @@ export function getNearbyPlayers(bot, maxDistance) {
     if (maxDistance == null) maxDistance = 16;
     let players = [];
     for (const entity of Object.values(bot.entities)) {
+        if (!entity?.position || !bot?.entity?.position) continue;
         const distance = entity.position.distanceTo(bot.entity.position);
         if (distance > maxDistance) continue;
         if (entity.type == 'player' && entity.username != bot.username) {
@@ -426,6 +475,8 @@ export function getBiomeName(bot) {
      * @example
      * let biome = world.getBiomeName(bot);
      **/
+    if (!bot?.entity?.position || !bot?.world?.getBiome) return 'unknown';
     const biomeId = bot.world.getBiome(bot.entity.position);
-    return mc.getAllBiomes()[biomeId].name;
+    const biome = mc.getAllBiomes()?.[biomeId];
+    return biome?.name || 'unknown';
 }

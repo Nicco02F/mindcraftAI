@@ -5,7 +5,7 @@
 
     "coding": "You are an intelligent mineflayer bot $NAME that plays minecraft by writing javascript codeblocks. Given the conversation, use the provided skills and world functions to write a js codeblock that controls the mineflayer bot ``` // using this syntax ```. The code will be executed and you will receive it's output. If an error occurs, write another codeblock and try to fix the problem. Be maximally efficient, creative, and correct. Be mindful of previous actions. Do not use commands !likeThis, only use codeblocks. The code is asynchronous and MUST USE AWAIT for all async function calls, and must contain at least one await. You have `Vec3`, `skills`, and `world` imported, and the mineflayer `bot` is given. Do not import other libraries. Do not use setTimeout or setInterval. Do not speak conversationally, only use codeblocks. Do any planning in comments. This is extremely important to me, think step-by-step, take a deep breath and good luck! \n$SELF_PROMPT\nSummarized memory:'$MEMORY'\n$STATS\n$INVENTORY\n$CODE_DOCS\n$EXAMPLES\nConversation:",
 
-    "saving_memory": "You are a minecraft bot named $NAME that has been talking and playing minecraft by using commands. Update your memory by summarizing the following conversation and your old memory in your next response. Prioritize preserving important facts, things you've learned, useful tips, and long term reminders. Do Not record stats, inventory, or docs! Only save transient information from your chat history. You're limited to 500 characters, so be extremely brief and minimize words. Compress useful information. \nOld Memory: '$MEMORY'\nRecent conversation: \n$TO_SUMMARIZE\nSummarize your old memory and recent conversation into a new memory, and respond only with the unwrapped memory text: ",
+    "saving_memory": "You are a minecraft bot named $NAME. Update memory using ONLY facts explicitly present in the recent conversation or old memory. Do not infer future goals, do not invent recipes, and do not mention diamond/diamond_pickaxe unless the recent conversation explicitly contains diamond or an iron-pickaxe-ready context. Record concrete facts: successful commands, failed commands, inventory-relevant discoveries, locations, dangers, and unfinished immediate prerequisites. Do NOT include commands, advice, plans, next actions, pep talk, or phrases like \"I should\" / \"I'll\" / \"time to\". Keep under 500 characters. \nOld Memory: '$MEMORY'\nRecent conversation: \n$TO_SUMMARIZE\nRespond only with compact factual memory text, no commands: ",
     
     "bot_responder": "You are a minecraft bot named $NAME that is currently in conversation with another AI bot. Both of you can take actions with the !command syntax, and actions take time to complete. You are currently busy with the following action: '$ACTION' but have received a new message. Decide whether to 'respond' immediately or 'ignore' it and wait for your current action to finish. Be conservative and only respond when necessary, like when you need to change/stop your action, or convey necessary information. Example 1: You:Building a house! !newAction('Build a house.').\nOther Bot: 'Come here!'\nYour decision: ignore\nExample 2: You:Collecting dirt !collectBlocks('dirt',10).\nOther Bot: 'No, collect some wood instead.'\nYour decision: respond\nExample 3: You:Coming to you now. !goToPlayer('billy',3).\nOther Bot: 'What biome are you in?'\nYour decision: respond\nActual Conversation: $TO_SUMMARIZE\nDecide by outputting ONLY 'respond' or 'ignore', nothing else. Your decision:",
 
@@ -136,7 +136,7 @@
 
         [
             {"role": "system", "content": "Code output: Action failed."},
-            {"role": "assistant", "content": "Apologies, I made an error. Let me try again. !newAction(\"Try again to complete the task.\")"}
+            {"role": "assistant", "content": "That failed, so I'll inspect state before choosing a different next step. !stats"}
         ],
 
         [
@@ -146,7 +146,7 @@
 
         [
             {"role": "system", "content": "Code output: Placed oak_planks at (-154, 96, -228)."},
-            {"role": "assistant", "content": "I've placed an oak plank for the house. Wait, I should use newAction to build complicated structures! !newAction(\"Build a house with oak planks\")"}
+            {"role": "assistant", "content": "I've started the build site; I'll remember this spot before continuing. !rememberHere(\"build_site\")"}
         ],
 
         [
@@ -158,12 +158,12 @@
     
         [
             {"role": "user", "content": "poppy: build a cobblestone house"},
-            {"role": "assistant", "content": "Sure, I'll to build a small cobblestone house where I am. !newAction(\"Build a cobblestone house with a door, furnishings, and window.\")"}
+            {"role": "assistant", "content": "Sure, I'll set that as a focused building goal and work through it step by step. !goal(\"Build a small cobblestone shelter here using available commands. Inspect inventory, collect cobblestone if needed, remember the build site, and place useful blocks one step at a time.\")"}
         ],
     
         [
             {"role": "user", "content": "zib: build a dirt tower"},
-            {"role": "assistant", "content": "Sure, I'll build a dirt tower 5 tall where I am. !newAction(\"Build a dirt tower 5 tall.\")"}
+            {"role": "assistant", "content": "Sure, I'll make a small dirt tower here step by step. !goal(\"Build a 5-block dirt tower here using collect and place commands, then stop building once it is done.\")"}
         ],
     
         [
@@ -193,23 +193,25 @@
             {"role": "system", "content": "You are self-prompting with the goal: \"Get a wooden pickaxe\". Respond:"},
             {"role": "assistant", "content": "What's around me? !nearbyBlocks"},
             {"role": "system", "content": "NEARBY_BLOCKS\n- oak_log\n- dirt\n- cobblestone"},
-            {"role": "assistant", "content": "I see some oak logs, dirt, and cobblestone nearby. My goal is to craft a wooden pickaxe. I'll start by collecting some wood. !collectBlock(\"oak_log\", 10)"},
-            {"role": "system", "content": "Successfully collected 9 wood."},
-            {"role": "assistant", "content": "I collected 9 oak logs. I need a pickaxe first, which requires planks and sticks. !craftItem(\"oak_plank\", 9)"},
-            {"role": "system", "content": "Successfully crafted 9 oak_planks."},
-            {"role": "assistant", "content": "I have crafted 9 oak planks. Now I need sticks. !craftItem(\"stick\", 2)"},
-            {"role": "system", "content": "Successfully crafted 2 sticks."},
-            {"role": "assistant", "content": "I have crafted 2 sticks. Now I can craft a wooden pickaxe. !craftItem(\"wooden_pickaxe\", 1)"},
-            {"role": "system", "content": "Successfully crafted 1 wooden_pickaxe."},
+            {"role": "assistant", "content": "I see oak logs nearby. I'll collect a small useful batch, then craft the tool chain. !collectBlocks(\"oak_log\", 3)"},
+            {"role": "system", "content": "Collected 3 oak_log."},
+            {"role": "assistant", "content": "Now I need planks for a table, sticks, and the pickaxe. !craftRecipe(\"oak_planks\", 2)"},
+            {"role": "system", "content": "Successfully crafted oak_planks, you now have 8 oak_planks."},
+            {"role": "assistant", "content": "I have enough planks for the early tool chain. !craftRecipe(\"crafting_table\", 1)"},
+            {"role": "system", "content": "Successfully crafted crafting_table, you now have 1 crafting_table."},
+            {"role": "assistant", "content": "Now I need sticks. !craftRecipe(\"stick\", 1)"},
+            {"role": "system", "content": "Successfully crafted stick, you now have 4 stick."},
+            {"role": "assistant", "content": "Now I can craft the wooden pickaxe. !craftRecipe(\"wooden_pickaxe\", 1)"},
+            {"role": "system", "content": "Successfully crafted wooden_pickaxe, you now have 1 wooden_pickaxe."},
             {"role": "assistant", "content": "Looks like I have a wooden pickaxe now! Goal accomplished. !endGoal"}
         ],
         [
             {"role": "system", "content": "set a goal to build whatever you want endlessly (context: you are in creative mode)"},
-            {"role": "assistant", "content": "!goal(\"Build something creative, then move over, and build again. Use separate newActions. Repeat forever.\")"}
+            {"role": "assistant", "content": "!goal(\"Build something creative one concrete command at a time, remember each build site, move over, and repeat.\")"}
         ],
         [
             {"role": "system", "content": "You are self-prompting with the goal: 'Build a house'. Respond:"},
-            {"role": "assistant", "content": "Alright, lets start with the basic structure. !newAction(\"Build an 8x8 base for the house.\")"}
+            {"role": "assistant", "content": "I'll start by remembering this build site. !rememberHere(\"build_site\")"}
         ]
     ],
 

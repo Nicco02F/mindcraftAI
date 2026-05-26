@@ -17,17 +17,16 @@ export class Prompter {
     constructor(agent, profile) {
         this.agent = agent;
         this.profile = profile;
-        const defaults_dir = path.join(__dirname, '../../profiles/defaults');
-        let default_profile = JSON.parse(readFileSync(path.join(defaults_dir, '_default.json'), 'utf8'));
+        let default_profile = JSON.parse(readFileSync('./profiles/defaults/_default.json', 'utf8'));
         let base_fp = '';
         if (settings.base_profile.includes('survival')) {
-            base_fp = path.join(defaults_dir, 'survival.json');
+            base_fp = './profiles/defaults/survival.json';
         } else if (settings.base_profile.includes('assistant')) {
-            base_fp = path.join(defaults_dir, 'assistant.json');
+            base_fp = './profiles/defaults/assistant.json';
         } else if (settings.base_profile.includes('creative')) {
-            base_fp = path.join(defaults_dir, 'creative.json');
+            base_fp = './profiles/defaults/creative.json';
         } else if (settings.base_profile.includes('god_mode')) {
-            base_fp = path.join(defaults_dir, 'god_mode.json');
+            base_fp = './profiles/defaults/god_mode.json';
         }
         let base_profile = JSON.parse(readFileSync(base_fp, 'utf8'));
 
@@ -77,7 +76,10 @@ export class Prompter {
 
         
         let embedding_model_profile = null;
-        if (this.profile.embedding) {
+        const embeddingDisabled = this.profile.embedding === false ||
+            this.profile.embedding === null ||
+            ['none', 'disabled', 'off', 'false'].includes(String(this.profile.embedding || '').toLowerCase());
+        if (!embeddingDisabled && this.profile.embedding) {
             try {
                 embedding_model_profile = selectAPI(this.profile.embedding);
             } catch (e) {
@@ -87,8 +89,10 @@ export class Prompter {
         if (embedding_model_profile) {
             this.embedding_model = createModel(embedding_model_profile);
         }
-        else {
+        else if (!embeddingDisabled && chat_model_profile.api !== 'ollama') {
             this.embedding_model = createModel({api: chat_model_profile.api});
+        } else {
+            this.embedding_model = null;
         }
 
         this.skill_libary = new SkillLibrary(agent, this.embedding_model);
@@ -164,8 +168,16 @@ export class Prompter {
         }
         if (prompt.includes('$EXAMPLES') && examples !== null)
             prompt = prompt.replaceAll('$EXAMPLES', await examples.createExampleMessage(messages));
-        if (prompt.includes('$MEMORY'))
-            prompt = prompt.replaceAll('$MEMORY', this.agent.history.memory);
+        if (prompt.includes('$MEMORY')) {
+            let memory = this.agent.history.memory || '';
+            if (this.agent.memory_bank?.getPromptSummary) {
+                const situation = this.agent.currentSituation ||
+                    (Array.isArray(messages) ? stringifyTurns(messages.slice(-6)) : '');
+                const advancedMemory = this.agent.memory_bank.getPromptSummary(situation);
+                memory = [memory, advancedMemory].filter(Boolean).join('\n');
+            }
+            prompt = prompt.replaceAll('$MEMORY', memory);
+        }
         if (prompt.includes('$TO_SUMMARIZE'))
             prompt = prompt.replaceAll('$TO_SUMMARIZE', stringifyTurns(to_summarize));
         if (prompt.includes('$CONVO'))
@@ -211,13 +223,13 @@ export class Prompter {
         this.last_prompt_time = Date.now();
     }
 
-    async promptConvo(messages) {
+    async promptConvo(messages, { allowStale = false } = {}) {
         this.most_recent_msg_time = Date.now();
         let current_msg_time = this.most_recent_msg_time;
 
         for (let i = 0; i < 3; i++) { // try 3 times to avoid hallucinations
             await this.checkCooldown();
-            if (current_msg_time !== this.most_recent_msg_time) {
+            if (!allowStale && current_msg_time !== this.most_recent_msg_time) {
                 return '';
             }
 
@@ -245,7 +257,7 @@ export class Prompter {
                 continue;
             }
 
-            if (current_msg_time !== this.most_recent_msg_time) {
+            if (!allowStale && current_msg_time !== this.most_recent_msg_time) {
                 console.warn(`${this.agent.name} received new message while generating, discarding old response.`);
                 return '';
             }

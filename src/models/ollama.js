@@ -4,7 +4,9 @@ export class Ollama {
     static prefix = 'ollama';
     constructor(model_name, url, params) {
         this.model_name = model_name;
-        this.params = params;
+        this.params = { ...(params || {}) };
+        this.fallback_model = this.params.fallback_model || null;
+        delete this.params.fallback_model;
         this.url = url || 'http://127.0.0.1:11434';
         this.chat_endpoint = '/api/chat';
         this.embedding_endpoint = '/api/embeddings';
@@ -31,6 +33,11 @@ export class Ollama {
                 });
                 if (apiResponse) {
                     res = apiResponse['message']['content'];
+                } else if (this.fallback_model && model !== this.fallback_model) {
+                    console.warn(`Ollama model "${model}" unavailable. Falling back to "${this.fallback_model}".`);
+                    this.model_name = this.fallback_model;
+                    model = this.fallback_model;
+                    continue;
                 } else {
                     res = 'No response data.';
                 }
@@ -71,11 +78,14 @@ export class Ollama {
     async embed(text) {
         let model = this.model_name || 'embeddinggemma';
         let body = { model: model, input: text };
-        let res = await this.send(this.embedding_endpoint, body);
-        return res['embedding'];
+        let res = await this.send(this.embedding_endpoint, body, { quiet: true });
+        if (!res?.embedding) {
+            throw new Error(`Ollama embedding model unavailable: ${model}`);
+        }
+        return res.embedding;
     }
 
-    async send(endpoint, body) {
+    async send(endpoint, body, options = {}) {
         const url = new URL(endpoint, this.url);
         let method = 'POST';
         let headers = new Headers();
@@ -89,8 +99,10 @@ export class Ollama {
                 throw new Error(`Ollama Status: ${res.status}`);
             }
         } catch (err) {
-            console.error('Failed to send Ollama request.');
-            console.error(err);
+            if (!options.quiet) {
+                console.error('Failed to send Ollama request.');
+                console.error(err);
+            }
         }
         return data;
     }

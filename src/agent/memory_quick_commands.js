@@ -1,0 +1,297 @@
+// QUICK REFERENCE: Common Memory Operations
+
+export const MEMORY_QUICK_COMMANDS = {
+    // ============ SHORT-TERM MEMORY ============
+    
+    // Add an event to recent memory
+    addEvent: (memory, event) => {
+        memory.addEvent(`Your event: ${event}`);
+    },
+    
+    // Get last 5 recent events
+    getRecentEvents: (memory) => {
+        return memory.getRecentEvents(5);
+    },
+
+    // ============ LONG-TERM MEMORY ============
+    
+    // Remember an important location
+    rememberPlace: (memory, name, x, y, z, description) => {
+        memory.rememberPlace(name, x, y, z, description);
+        // Auto saves to JSON
+    },
+
+    // Set home location
+    setHome: (memory, x, y, z) => {
+        memory.setHome(x, y, z);
+    },
+
+    // Get home location
+    getHome: (memory) => {
+        return memory.longTermMemory.home_position;
+    },
+
+    // Record a dangerous location
+    recordDanger: (memory, description, location) => {
+        memory.recordDanger(description, location);
+    },
+
+    // Find resources from memory
+    findResource: (memory, resourceName) => {
+        return memory.longTermMemory.resource_locations
+            .filter(r => r.resource === resourceName);
+    },
+
+    // Add a long-term goal
+    addGoal: (memory, goal) => {
+        memory.addUnfinishedGoal(goal);
+    },
+
+    // Complete a goal
+    completeGoal: (memory, goal) => {
+        memory.completeGoal(goal);
+    },
+
+    // Get all unfinished goals
+    getGoals: (memory) => {
+        return memory.longTermMemory.unfinished_goals;
+    },
+
+    // ============ SKILLS ============
+
+    // Learn a new skill
+    learnSkill: (memory, name, steps, successRate = 0.8) => {
+        memory.recordSkill(name, steps, successRate);
+        // steps = ["step1", "step2", "step3"]
+    },
+
+    // Get a specific skill
+    getSkill: (memory, skillName) => {
+        return memory.getSkill(skillName);
+    },
+
+    // Update skill success rate after use
+    updateSkill: (memory, skillName, wasSuccessful) => {
+        memory.updateSkillSuccess(skillName, wasSuccessful);
+    },
+
+    // Get all learned skills
+    getAllSkills: (memory) => {
+        return memory.skills;
+    },
+
+    // ============ PERSONALITY ============
+
+    // Get current mood
+    getMood: (memory) => {
+        return memory.personality.mood;
+    },
+
+    // Set mood
+    setMood: (memory, mood) => {
+        memory.updatePersonality({ mood });
+    },
+
+    // Get fear level
+    getFearLevel: (memory) => {
+        return memory.personality.fear_level;
+    },
+
+    // Increase fear (after death, trauma)
+    increaseFear: (memory, amount = 0.1) => {
+        const newFear = Math.min(1, memory.personality.fear_level + amount);
+        memory.updatePersonality({ fear_level: newFear });
+    },
+
+    // Decrease fear (after success, safety)
+    decreaseFear: (memory, amount = 0.05) => {
+        const newFear = Math.max(0, memory.personality.fear_level - amount);
+        memory.updatePersonality({ fear_level: newFear });
+    },
+
+    // Get exploration drive
+    getExplorationDrive: (memory) => {
+        return memory.personality.exploration_drive;
+    },
+
+    // Boost exploration drive
+    boostExploration: (memory, amount = 0.1) => {
+        const newDrive = Math.min(1, memory.personality.exploration_drive + amount);
+        memory.updatePersonality({ exploration_drive: newDrive });
+    },
+
+    // Record trauma/bad event
+    recordTrauma: (memory, event) => {
+        memory.recordTrauma(event);
+        // Automatically increases fear and sets mood to 'anxious'
+    },
+
+    // Record success
+    recordSuccess: (memory, event) => {
+        memory.recordSuccess(event);
+        // Automatically increases confidence and improves mood
+    },
+
+    // ============ MEMORY RETRIEVAL ============
+
+    // Get all memories relevant to a situation
+    getRelevantMemories: (memory, situation) => {
+        return memory.retrieveRelevantMemories(situation);
+        // Returns: {
+        //   short_term: [...],
+        //   long_term: [...],
+        //   skills: [...],
+        //   personality_state: {...}
+        // }
+    },
+
+    // ============ FAILURE TRACKING ============
+
+    // Record a failed attempt
+    recordFailure: (memory, action) => {
+        memory.recordFailedAttempt(action);
+    },
+
+    // Check if action failed too many times
+    shouldAbortAction: (memory, action) => {
+        return memory.shouldAbortAction(action);
+        // Returns true if failed 2+ times
+    },
+
+    // Reset failure counter for an action
+    resetFailure: (memory, action) => {
+        memory.resetFailedAttempt(action);
+    },
+
+    // ============ DIARY ============
+
+    // Add manual diary entry
+    addDiaryEntry: (memory, entry) => {
+        memory.addDiaryEntry(entry);
+    },
+
+    // Generate automatic diary (summary of recent events)
+    autoGenerateDiary: (memory) => {
+        return memory.generateAutoDiary();
+    },
+
+    // Get all diary entries
+    getDiary: (memory) => {
+        return memory.diary;
+    },
+
+    // ============ UTILITY ============
+
+    // Export all memory (for debugging)
+    exportAll: (memory) => {
+        return memory.getAllMemories();
+    },
+
+    // Get memory statistics
+    getStats: (memory) => {
+        return {
+            events: memory.shortTermMemory.length,
+            places: Object.keys(memory.longTermMemory.discovered_places || {}).length,
+            dangers: (memory.longTermMemory.danger_zones || []).length,
+            resources: (memory.longTermMemory.resource_locations || []).length,
+            goals: (memory.longTermMemory.unfinished_goals || []).length,
+            skills: memory.skills.length,
+            diary_entries: memory.diary.length
+        };
+    },
+
+    // Clear all memory (fresh start)
+    clearAll: (memory) => {
+        memory.clearAllMemories();
+    }
+};
+
+// ============================================================
+// USAGE EXAMPLES IN CODE
+// ============================================================
+
+/*
+
+// Example 1: Simple event recording
+function onAction(agent, action, result) {
+    MEMORY_QUICK_COMMANDS.addEvent(agent.memory_bank, `Tried: ${action}`);
+    
+    if (result.success) {
+        MEMORY_QUICK_COMMANDS.recordSuccess(agent.memory_bank, action);
+    } else {
+        MEMORY_QUICK_COMMANDS.recordFailure(agent.memory_bank, action);
+        
+        if (MEMORY_QUICK_COMMANDS.shouldAbortAction(agent.memory_bank, action)) {
+            console.log(`Abort ${action} - failed too many times`);
+            return; // Try something else
+        }
+    }
+}
+
+// Example 2: Location discovery
+function onLocationDiscovered(agent, name, x, y, z, description) {
+    MEMORY_QUICK_COMMANDS.rememberPlace(agent.memory_bank, name, x, y, z, description);
+    
+    if (name === 'home') {
+        MEMORY_QUICK_COMMANDS.setHome(agent.memory_bank, x, y, z);
+    }
+}
+
+// Example 3: Death handling
+function onAgentDeath(agent, deathMessage) {
+    MEMORY_QUICK_COMMANDS.recordTrauma(agent.memory_bank, deathMessage);
+    
+    // Fear increases automatically
+    console.log(`Fear is now: ${MEMORY_QUICK_COMMANDS.getFearLevel(agent.memory_bank)}`);
+}
+
+// Example 4: Skill learning
+function teachSkill(agent, skillName, steps) {
+    MEMORY_QUICK_COMMANDS.learnSkill(agent.memory_bank, skillName, steps, 0.7);
+}
+
+// Example 5: Skill usage
+function useSkill(agent, skillName, wasSuccessful) {
+    MEMORY_QUICK_COMMANDS.updateSkill(agent.memory_bank, skillName, wasSuccessful);
+    
+    if (wasSuccessful) {
+        console.log(`${skillName} is getting better!`);
+    }
+}
+
+// Example 6: Get memory recommendations before decision
+function makeDecision(agent, situation) {
+    const memories = MEMORY_QUICK_COMMANDS.getRelevantMemories(
+        agent.memory_bank, 
+        situation
+    );
+    
+    console.log('Relevant memories:');
+    console.log('Recent events:', memories.short_term);
+    console.log('Learned skills:', memories.skills);
+    
+    // Use this info in LLM prompt
+}
+
+// Example 7: Personality evolution
+function onLongSurvival(agent, hours) {
+    MEMORY_QUICK_COMMANDS.recordSuccess(agent.memory_bank, `Survived ${hours} hours`);
+    MEMORY_QUICK_COMMANDS.decreaseFear(agent.memory_bank, 0.05);
+    MEMORY_QUICK_COMMANDS.boostExploration(agent.memory_bank, 0.1);
+}
+
+// Example 8: Stat debugging
+function debugMemory(agent) {
+    const stats = MEMORY_QUICK_COMMANDS.getStats(agent.memory_bank);
+    console.log('Memory Stats:', stats);
+    
+    const mood = MEMORY_QUICK_COMMANDS.getMood(agent.memory_bank);
+    console.log('Current Mood:', mood);
+    
+    const fear = MEMORY_QUICK_COMMANDS.getFearLevel(agent.memory_bank);
+    console.log('Fear Level:', fear);
+}
+
+*/
+
+export default MEMORY_QUICK_COMMANDS;

@@ -32,7 +32,7 @@ export class History {
 
     async summarizeMemories(turns) {
         console.log("Storing memories...");
-        this.memory = await this.agent.prompter.promptMemSaving(turns);
+        this.memory = this.sanitizeMemorySummary(await this.agent.prompter.promptMemSaving(turns), turns);
 
         if (this.memory.length > 500) {
             this.memory = this.memory.slice(0, 500);
@@ -40,6 +40,106 @@ export class History {
         }
 
         console.log("Memory updated to: ", this.memory);
+    }
+
+    sanitizeMemorySummary(summary, turns) {
+        summary = String(summary || '').trim();
+        summary = summary.replace(/!\w+(?:\([^)]*\))?/g, '').trim();
+        const source = turns.map(turn => String(turn.content || '')).join('\n').toLowerCase();
+
+        let fragments = summary
+            .split(/(?<=[.!?])\s+|\n+/)
+            .map(fragment => fragment.trim())
+            .filter(Boolean);
+
+        fragments = fragments.filter(fragment => {
+            const text = fragment.toLowerCase();
+
+            if (/\b(navigating|moving|searching|collecting|crafting|mining|attacking)\b/.test(text)) {
+                return false;
+            }
+
+            if (/\b(to mine|to collect|to craft|next step|now i|i need|need to)\b/.test(text)) {
+                return false;
+            }
+
+            const coords = text.match(/-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?/g) || [];
+            for (const coord of coords) {
+                if (!source.includes(coord)) return false;
+            }
+
+            if (text.includes('diamond') && !source.includes('diamond')) {
+                return false;
+            }
+
+            if (text.includes('next') && text.includes('diamond') && !source.includes('iron_pickaxe')) {
+                return false;
+            }
+
+            if (text.includes('mangrove') && !source.includes('mangrove')) {
+                return false;
+            }
+
+            if (text.includes('can be converted') && !source.includes('successfully crafted')) {
+                return false;
+            }
+
+            if (text.includes('already have') && !source.includes('you already have') && !source.includes('you now have')) {
+                return false;
+            }
+
+            if (/^(okay|ok|let's|lets|time to|i should|i will|i'll)\b/.test(text)) {
+                return false;
+            }
+
+            if (text.includes('action output') ||
+                text.includes('it requires:') ||
+                text.includes('you do not have the resources') ||
+                text.includes("don't have right tools") ||
+                text.includes('produced no action output') ||
+                text.includes('collected 0') ||
+                text.includes('failed collectblocks') ||
+                text.includes('trauma:') ||
+                text.includes('runtime exception') ||
+                text.includes("cannot read properties") ||
+                text.includes('attempting collectblocks')) {
+                return false;
+            }
+
+            return true;
+        });
+
+        return fragments.join(' ').slice(0, 500);
+    }
+
+    sanitizeLoadedTurns(turns) {
+        const maxLoadedTurns = Math.max(Number(this.max_messages) || 0, 12);
+        const failedActions = this.agent?.memory_bank?.failedAttempts || {};
+
+        return (Array.isArray(turns) ? turns : [])
+            .filter(turn => {
+                const content = String(turn?.content || '');
+                const lower = content.toLowerCase();
+
+                if (!content.trim()) return false;
+                if (content.includes('Your next response MUST contain exactly one executable command') &&
+                    content.includes('Active dynamic microtask plan')) {
+                    return false;
+                }
+                if (lower.startsWith('memory warning:')) {
+                    return false;
+                }
+                if (turn.role === 'assistant' && /^!\w+/.test(content.trim())) {
+                    const commandMatch = content.match(/^!(\w+)(?:\((.*)\))?/);
+                    const commandName = commandMatch ? `!${commandMatch[1]}` : null;
+                    const args = commandMatch?.[2] || '';
+                    const firstStringArg = args.match(/"([^"]+)"/)?.[1] || args.match(/'([^']+)'/)?.[1] || null;
+                    const actionKey = firstStringArg ? `${commandName}:${firstStringArg}` : commandName;
+                    if (failedActions[actionKey] >= 2) return false;
+                }
+                return true;
+            })
+            .slice(-maxLoadedTurns);
     }
 
     async appendFullHistory(to_store) {
@@ -104,8 +204,8 @@ export class History {
                 return null;
             }
             const data = JSON.parse(readFileSync(this.memory_fp, 'utf8'));
-            this.memory = data.memory || '';
-            this.turns = data.turns || [];
+            this.turns = this.sanitizeLoadedTurns(data.turns || []);
+            this.memory = this.sanitizeMemorySummary(data.memory || '', this.turns);
             console.log('Loaded memory:', this.memory);
             return data;
         } catch (error) {

@@ -4,10 +4,27 @@ import * as mc from '../utils/mcdata.js';
 import settings from './settings.js'
 import convoManager from './conversation.js';
 
+const FOOD_OBJECTIVES = new Set(['urgent_food', 'secure_food']);
+const PRACTICAL_WEAPONS = [
+    'wooden_sword', 'stone_sword', 'iron_sword', 'diamond_sword', 'netherite_sword',
+    'wooden_axe', 'stone_axe', 'iron_axe', 'diamond_axe', 'netherite_axe'
+];
+
 async function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
     if (agent.shut_up || !settings.narrate_behavior) return;
     agent.openChat(message);
+}
+
+function currentObjectiveId(agent) {
+    return agent?.objective_planner?.state?.snapshot?.objective_id ||
+        agent?.objective_planner?.state?.current_objective_id ||
+        null;
+}
+
+function hasPracticalWeapon(bot) {
+    const inventory = world.getInventoryCounts(bot);
+    return PRACTICAL_WEAPONS.some(item => (inventory[item] || 0) > 0);
 }
 
 // a mode is a function that is called every tick to respond immediately to the world
@@ -176,6 +193,11 @@ const modes_list = [
         on: true,
         active: false,
         update: async function (agent) {
+            const foodObjectiveActive = FOOD_OBJECTIVES.has(currentObjectiveId(agent));
+            const hungry = agent.bot.food <= 12;
+            if (!foodObjectiveActive && !hungry) return;
+            if (!hungry && !hasPracticalWeapon(agent.bot)) return;
+
             const huntable = world.getNearestEntityWhere(agent.bot, entity => mc.isHuntable(entity), 8);
             if (huntable && await world.isClearPath(agent.bot, huntable)) {
                 execute(this, agent, async () => {
@@ -196,7 +218,7 @@ const modes_list = [
         prev_item: null,
         noticed_at: -1,
         update: async function (agent) {
-            let item = world.getNearestEntityWhere(agent.bot, entity => entity.name === 'item', 8);
+            let item = world.getNearestEntityWhere(agent.bot, entity => world.isDroppedItemEntity(entity), 8);
             let empty_inv_slots = agent.bot.inventory.emptySlotCount();
             if (item && item !== this.prev_item && await world.isClearPath(agent.bot, item) && empty_inv_slots > 1) {
                 if (this.noticed_at === -1) {

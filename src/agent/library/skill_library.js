@@ -15,7 +15,13 @@ export class SkillLibrary {
         this.skill_docs = skillDocs;
         if (this.embedding_model) {
             try {
-                const embeddingPromises = skillDocs.map((doc) => {
+                const firstDoc = skillDocs[0];
+                if (firstDoc) {
+                    const firstDesc = firstDoc.split('\n').slice(0, 2).join('');
+                    this.skill_docs_embeddings[firstDoc] = await this.embedding_model.embed(firstDesc);
+                }
+
+                const embeddingPromises = skillDocs.slice(1).map((doc) => {
                     return (async () => {
                         let func_name_desc = doc.split('\n').slice(0, 2).join('');
                         this.skill_docs_embeddings[doc] = await this.embedding_model.embed(func_name_desc);
@@ -23,8 +29,9 @@ export class SkillLibrary {
                 });
                 await Promise.all(embeddingPromises);
             } catch (error) {
-                console.warn('Error with embedding model, using word-overlap instead.');
+                console.warn(`Error with embedding model, using word-overlap instead. ${error.message || error}`);
                 this.embedding_model = null;
+                this.skill_docs_embeddings = {};
             }
         }
         this.always_show_skills_docs = {};
@@ -43,28 +50,39 @@ export class SkillLibrary {
         let skill_doc_similarities = [];
 
         if (select_num === -1) {
-            skill_doc_similarities = Object.keys(this.skill_docs_embeddings)
+            skill_doc_similarities = this.skill_docs
             .map(doc_key => ({
                 doc_key,
                 similarity_score: 0
             }));
         }
         else if (!this.embedding_model) {
-            skill_doc_similarities = Object.keys(this.skill_docs_embeddings)
+            skill_doc_similarities = this.skill_docs
                 .map(doc_key => ({
                     doc_key,
-                    similarity_score: wordOverlapScore(message, this.skill_docs_embeddings[doc_key])
+                    similarity_score: wordOverlapScore(message, doc_key)
                 }))
                 .sort((a, b) => b.similarity_score - a.similarity_score);
         }
         else {
-            let latest_message_embedding = await this.embedding_model.embed(message);
-            skill_doc_similarities = Object.keys(this.skill_docs_embeddings)
-            .map(doc_key => ({
-                doc_key,
-                similarity_score: cosineSimilarity(latest_message_embedding, this.skill_docs_embeddings[doc_key])
-            }))
-            .sort((a, b) => b.similarity_score - a.similarity_score);
+            try {
+                let latest_message_embedding = await this.embedding_model.embed(message);
+                skill_doc_similarities = Object.keys(this.skill_docs_embeddings)
+                .map(doc_key => ({
+                    doc_key,
+                    similarity_score: cosineSimilarity(latest_message_embedding, this.skill_docs_embeddings[doc_key])
+                }))
+                .sort((a, b) => b.similarity_score - a.similarity_score);
+            } catch (error) {
+                console.warn(`Embedding lookup failed, using word-overlap instead. ${error.message || error}`);
+                this.embedding_model = null;
+                skill_doc_similarities = this.skill_docs
+                    .map(doc_key => ({
+                        doc_key,
+                        similarity_score: wordOverlapScore(message, doc_key)
+                    }))
+                    .sort((a, b) => b.similarity_score - a.similarity_score);
+            }
         }
 
         let length = skill_doc_similarities.length;

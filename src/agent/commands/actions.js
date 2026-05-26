@@ -28,7 +28,9 @@ function runAsAction (actionFn, resume = false, timeout = -1) {
 export const actionsList = [
     {
         name: '!newAction',
-        description: 'Perform new and unknown custom behaviors that are not available as a command.', 
+        description: settings.allow_insecure_coding
+            ? 'Perform new and unknown custom behaviors that are not available as a command.'
+            : 'Disabled because allow_insecure_coding=false. Do not use unless the user enables code generation in settings.js.',
         params: {
             'prompt': { type: 'string', description: 'A natural language prompt to guide code generation. Make a detailed step-by-step plan.' }
         },
@@ -93,7 +95,7 @@ export const actionsList = [
         description: 'Go to the given player.',
         params: {
             'player_name': {type: 'string', description: 'The name of the player to go to.'},
-            'closeness': {type: 'float', description: 'How close to get to the player.', domain: [0, Infinity]}
+            'closeness': {type: 'float', description: 'How close to get to the player.', domain: [0, Infinity], optional: true, default: 3}
         },
         perform: runAsAction(async (agent, player_name, closeness) => {
             await skills.goToPlayer(agent.bot, player_name, closeness);
@@ -104,7 +106,7 @@ export const actionsList = [
         description: 'Endlessly follow the given player.',
         params: {
             'player_name': {type: 'string', description: 'name of the player to follow.'},
-            'follow_dist': {type: 'float', description: 'The distance to follow from.', domain: [0, Infinity]}
+            'follow_dist': {type: 'float', description: 'The distance to follow from.', domain: [0, Infinity], optional: true, default: 4}
         },
         perform: runAsAction(async (agent, player_name, follow_dist) => {
             await skills.followPlayer(agent.bot, player_name, follow_dist);
@@ -117,7 +119,7 @@ export const actionsList = [
             'x': {type: 'float', description: 'The x coordinate.', domain: [-Infinity, Infinity]},
             'y': {type: 'float', description: 'The y coordinate.', domain: [-64, 320]},
             'z': {type: 'float', description: 'The z coordinate.', domain: [-Infinity, Infinity]},
-            'closeness': {type: 'float', description: 'How close to get to the location.', domain: [0, Infinity]}
+            'closeness': {type: 'float', description: 'How close to get to the location.', domain: [0, Infinity], optional: true, default: 1}
         },
         perform: runAsAction(async (agent, x, y, z, closeness) => {
             await skills.goToPosition(agent.bot, x, y, z, closeness);
@@ -209,6 +211,13 @@ export const actionsList = [
         })
     },
     {
+        name: '!equipBestGear',
+        description: 'Equip the best available armor and a practical weapon or fallback tool.',
+        perform: runAsAction(async (agent) => {
+            await skills.equipBestGear(agent.bot);
+        })
+    },
+    {
         name: '!putInChest',
         description: 'Put the given item in the nearest chest.',
         params: {
@@ -261,7 +270,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, type, num) => {
             await skills.collectBlock(agent.bot, type, num);
-        }, false, 10) // 10 minute timeout
+        }, false, 2) // 2 minute timeout
     },
     {
         name: '!craftRecipe',
@@ -282,12 +291,7 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of times to smelt the item.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, item_name, num) => {
-            let success = await skills.smeltItem(agent.bot, item_name, num);
-            if (success) {
-                setTimeout(() => {
-                    agent.cleanKill('Safely restarting to update inventory.');
-                }, 500);
-            }
+            await skills.smeltItem(agent.bot, item_name, num);
         })
     },
     {
@@ -300,11 +304,10 @@ export const actionsList = [
     },
         {
         name: '!placeHere',
-        description: 'Place a given block in the current location. Do NOT use to build structures, only use for single blocks/torches.',
+        description: 'Place a given block in the nearest safe spot. Do NOT use to build structures, only use for single blocks/torches.',
         params: {'type': { type: 'BlockOrItemName', description: 'The block type to place.' }},
         perform: runAsAction(async (agent, type) => {
-            let pos = agent.bot.entity.position;
-            await skills.placeBlock(agent.bot, type, pos.x, pos.y, pos.z);
+            await skills.placeBlockNear(agent.bot, type, 5);
         })
     },
     {
@@ -338,7 +341,7 @@ export const actionsList = [
     {
         name: '!stay',
         description: 'Stay in the current location no matter what. Pauses all modes.',
-        params: {'type': { type: 'int', description: 'The number of seconds to stay. -1 for forever.', domain: [-1, Number.MAX_SAFE_INTEGER] }},
+        params: {'type': { type: 'int', description: 'The number of seconds to stay. -1 for forever.', domain: [-1, Number.MAX_SAFE_INTEGER], optional: true, default: 10 }},
         perform: runAsAction(async (agent, seconds) => {
             await skills.stay(agent.bot, seconds);
         })
@@ -373,6 +376,7 @@ export const actionsList = [
             else {
                 agent.self_prompter.start(prompt);
             }
+            return 'Goal started.';
         }
     },
     {
@@ -397,10 +401,22 @@ export const actionsList = [
         params: {
             'id': { type: 'int', description: 'The id number of the villager that you want to trade with.' },
             'index': { type: 'int', description: 'The index of the trade you want executed (1-indexed).', domain: [1, Number.MAX_SAFE_INTEGER] },
-            'count': { type: 'int', description: 'How many times that trade should be executed.', domain: [1, Number.MAX_SAFE_INTEGER] },
+            'count': { type: 'int', description: 'How many times that trade should be executed.', domain: [1, Number.MAX_SAFE_INTEGER], optional: true, default: 1 },
         },
         perform: runAsAction(async (agent, id, index, count) => {
             await skills.tradeWithVillager(agent.bot, id, index, count);
+        })
+    },
+    {
+        name: '!autoTradeWithVillager',
+        description: 'Automatically execute the best affordable useful trade with a villager. Use "any" for wanted_item when no specific item is needed.',
+        params: {
+            'id': { type: 'int', description: 'The id number of the villager that you want to trade with.' },
+            'wanted_item': { type: 'string', description: 'Desired output item name, or "any" to let the bot pick a useful trade.', optional: true, default: 'any' },
+            'count': { type: 'int', description: 'Maximum number of times to execute the selected trade.', domain: [1, Number.MAX_SAFE_INTEGER], optional: true, default: 1 },
+        },
+        perform: runAsAction(async (agent, id, wanted_item, count) => {
+            await skills.autoTradeWithVillager(agent.bot, id, wanted_item, count);
         })
     },
     {
@@ -430,7 +446,7 @@ export const actionsList = [
             if (!convoManager.inConversation(player_name))
                 return `Not in conversation with ${player_name}.`;
             convoManager.endConversation(player_name);
-            return `Converstaion with ${player_name} ended.`;
+            return `Conversation with ${player_name} ended.`;
         }
     },
     {

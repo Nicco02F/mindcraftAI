@@ -57,6 +57,14 @@ export function getFullState(agent) {
             current: agent.isIdle() ? 'Idle' : agent.actions.currentActionLabel,
             isIdle: agent.isIdle()
         },
+        planning: {
+            objective: agent.objective_planner?.state?.snapshot?.objective || null,
+            objectiveId: agent.objective_planner?.state?.snapshot?.objective_id || null,
+            activeMicrotask: agent.objective_planner?.state?.snapshot?.active_microtask || null,
+            suggestedCommand: agent.objective_planner?.state?.snapshot?.suggested_command || null,
+            activeMilestone: agent.task_manager?.activeQuests?.active_milestone || null,
+            failures: agent.memory_bank?.failedAttempts || {}
+        },
         surroundings: {
             below,
             legs,
